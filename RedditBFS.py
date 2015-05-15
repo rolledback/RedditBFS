@@ -8,6 +8,9 @@ user_agent = 'Test PRAW app by /u/rolledback'
 r = praw.Reddit(user_agent = user_agent)
 parent_nodes = {}
 
+def verify_name(name, check_name = ''):
+    return name != None and name != u'None' and name != u'[deleted]' and name != check_name
+
 def print_path(end):
     print end
     while end in parent_nodes:
@@ -15,10 +18,10 @@ def print_path(end):
         end = parent_nodes[end]['parent']
 
 def handle(func, *args, **kwargs):
-    print(str(func))
     attempts = 5
     start = time.time()
     res = []
+    print str(func)
     while attempts > 0:
         try:
             res = func(*args, **kwargs)
@@ -26,9 +29,9 @@ def handle(func, *args, **kwargs):
         except Exception as e:
             print str(attempts) + ' Error, attempting sleeping.'
             attempts = attempts - 1
-            print str(e) + '\n'
+            print str(e)
             time.sleep(2)
-    print 'Handle lasted: ' + str(time.time() - start)
+    print 'Handle runtime: ' + str(time.time() - start)
     return res
 
 def bfs(start, end):
@@ -41,9 +44,7 @@ def bfs(start, end):
     queue.append(None)
 
     while(len(queue) > 0):
-        start = time.time()
-        print start
-        print 'Queue length: ' + str(len(queue))
+        print 'Queue length:', len(queue)
 
         if queue[0] == None:
             depth = depth + 1
@@ -52,18 +53,22 @@ def bfs(start, end):
 
         user = handle(r.get_redditor, queue.pop(0))
         if user != []:
-            print 'Current: ' + user.name + ', at depth: ' + str(depth)
-            print 'Users viewed: ' + str(count)
+            print 'Current: ' + user.name + ', at depth:', depth
+            print 'Users viewed:', count
             count = count + 1
 
             new_nodes = []
             try:
-                new_nodes = parse_comments(user) + parse_submissions(user)
-                print 'Num connections: ' + str(len(new_nodes))
-                print 'Processing time: ' + str(time.time() - start)
+                start = time.time()
+                print start
+                new_nodes = process_user(user)
+                end = time.time()
+                print 'Num connections:', len(new_nodes)
+                print 'Processing time:', (end - start)
             except Exception as e:
                 print 'Something broke.'
                 print str(e)
+                print traceback.format_exc()
 
             for entry in new_nodes:
                 name = entry[0]
@@ -73,42 +78,38 @@ def bfs(start, end):
                         return print_path(end)
                     visited.add(name)
                     queue.append(name)
-            print
+            print '\n'
 
     print 'No path'
     return
 
-def parse_comments(user):
-    authors = []
-    print '\n----- parse_comments ------'
-    print time.time()
-    for comment in handle(user.get_comments):
-        print 'comment', time.time()
-        if comment.link_id == comment.parent_id and comment.link_author != u'[deleted]':
-            if comment.link_author != user.name and comment.link_author != u'None':
-                authors.append((comment.link_author, {'parent': user.name, 'permalink': comment.link_url}))
-    print '---------------------------'
-    return authors
+def process_user(user):
+    connections = []
+    result = None
+    for entry in handle(user.get_overview, limit = None):
+        if isinstance(entry, praw.objects.Comment):
+            result = parse_comment(user.name, entry)
+        elif entry.num_comments > 0:
+            result = parse_submission(user.name, entry)
+        if result != None:
+            connections.append(result)
+    return connections
 
-def parse_submissions(user):
-    commenters = []
-    print '\n---- parse_submissions ----'
-    print time.time()
-    submissions = handle(user.get_submitted)
-    for submission in submissions:
-        print 'submission', time.time()
-        handle(submission.replace_more_comments, threshold = 0)
-        for comment in submission.comments:
-            print 'comment', time.time()
-            if comment.is_root and comment.author != u'[deleted]':
-                if comment.author != user.name and comment.author != u'None':
-                    commenters.append((comment.author, {'parent': user.name, 'permalink': submission.permalink}))
-    print '--------------------------'
-    return commenters
+def parse_comment(name, comment):
+    if comment.is_root and verify_name(comment.link_author):
+        return (comment.link_author, {'parent': name, 'permalink': comment.link_url})
+    return None
+
+def parse_submission(name, submission):
+    handle(submission.replace_more_comments, limit = None)
+    for comment in submission.comments:
+        if comment.author != None and verify_name(comment.author.name, name):
+            return (comment.author.name, {'parent': name, 'permalink': submission.permalink})
+    return None
 
 start = time.time()
 bfs(u'rolledback', u'scrub_lord')
 end = time.time()
 interval = end - start;
-print str(interval)
+print interval
 
