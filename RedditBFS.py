@@ -2,11 +2,11 @@ import praw
 import pprint
 import time
 import traceback
-import gc
 
 user_agent = 'Test PRAW app by /u/rolledback'
 r = praw.Reddit(user_agent = user_agent)
 parent_nodes = {}
+limit = None
 
 def verify_name(name, check_name = ''):
     return name != None and name != u'None' and name != u'[deleted]' and name != check_name
@@ -86,7 +86,7 @@ def bfs(start, end):
 def process_user(user):
     connections = []
     result = None
-    for entry in handle(user.get_overview, limit = None):
+    for entry in handle(user.get_overview, limit = limit):
         if isinstance(entry, praw.objects.Comment):
             result = parse_comment(user.name, entry)
         elif entry.num_comments > 0:
@@ -101,13 +101,18 @@ def parse_comment(name, comment):
     return None
 
 def parse_submission(name, submission):
-    handle(submission.replace_more_comments, limit = None)
+    handle(submission.replace_more_comments, limit = limit)
     for comment in submission.comments:
         if comment.author != None and verify_name(comment.author.name, name):
             return (comment.author.name, {'parent': name, 'permalink': submission.permalink})
     return None
 
 start = time.time()
+
+with open('config.ini', 'r') as in_file:
+        config = eval(in_file.read())
+        limit = config['limit']
+
 bfs(u'rolledback', u'scrub_lord')
 end = time.time()
 interval = end - start;
