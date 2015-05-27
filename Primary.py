@@ -1,5 +1,6 @@
 import threading
 from flask import Flask
+from flask import request
 import requests
 
 app = Flask(__name__)
@@ -18,7 +19,7 @@ class Replicate(object):
         self.target = None
 
 nodes = []
-target = ''
+goal = ''
 
 targets_process = []
 process_lock = threading.Lock()
@@ -30,25 +31,23 @@ targets_processed = []
 queue = []
 processed_lock = threading.Lock()
 
-manager_sema = threading.Semaphore(0)
+manager_node_sema = threading.Semaphore(0)
+manager_bfs_sema = threading.Semaphore(0)
 bfs_sema = threading.Semaphore(0)
 
 '''
 Utility methods
 '''
 
+code_strs = ['available', 'busy', 'down', 'unknown']
+
 def status_to_str(code):
-    if code == 0:
-        return 'available'
-    elif code == 1:
-        return 'busy'
-    elif code == 2:
-        return 'down'
-    return 'unknown'
+    return code_strs[code]
 
 def find_node_by_ip(ip):
     for node in nodes:
-        if node.ip == ip:
+        print node.ip.split(':')
+        if node.ip.split(':')[0] == ip:
             return node
     return None
 
@@ -73,10 +72,10 @@ def handshake_nodes():
             node.target = None
         elif result.status_code > 299:
             node.status = Status.UNKNOWN
-            Node.target = None
+            node.target = None
         else:
-            node.status = result['status']
-            node.target = result['target']
+            node.status = result.json()['status']
+            node.target = result.json()['target']
 
         if node.status == Status.DOWN:
             down_node_ips.append(node.ip)
@@ -88,8 +87,7 @@ def handshake_nodes():
 
 # send username to a node
 def send_target(node, target):
-    payload = {'target': target}
-    return requests.post('http://' + node.ip + '/target', data=payload).json()
+    return requests.get('http://' + node.ip + '/target/' + target)
 
 '''
 api based methods :: MAIN THREAD
@@ -98,29 +96,38 @@ api based methods :: MAIN THREAD
 # receive results of a target request, should move target out
 # of processind and into processed, should also wake up the
 # management thread
-@app.route('/result', methods = ['GET'])
+@app.route('/result', methods = ['POST', 'GET'])
 def receive_result():
-    request = request.json()
-    target = request['name']
-    connections = request['connections']
+    print request.get_data()
+    data = eval(request.get_data())
+    target = data['target']
+    print 'target'
+    connections = data['connections']
+    print 'connections'
 
     processing_lock.acquire()
     processed_lock.acquire()
+    print 'acquired'
 
     targets_processing.remove(target)
     targets_processed.append(target)
     queue.extend(connections)
+    print 'done'
 
     processed_lock.release()
     processing_lock.release()
+    print 'released'
 
+    print request.remote_addr
     node = find_node_by_ip(request.remote_addr)
-    node.status = request['status']
+    print 'found'
+    node.status = data['status']
+    print 'status'
     node.target = None
+    print 'Signaling manager sema.'
+    manager_node_sema.release()
 
-    manager_sema.release()
-
-    return 200
+    return ''
 
 '''
 replicate management methods :: THREAD 1, WOKEN/STARTED BY MAIN THREAD
@@ -135,12 +142,14 @@ def process_next_target():
             processing_lock.acquire()
 
             to_send = targets_process.pop(0)
-            send_target(node, to_send)
+            result = send_target(node, to_send)
+            node.status = Status.BUSY
             targets_processing.append(to_send)
 
             processing_lock.release()
             process_lock.release()
             return True
+
     return False
 
 # init management thread
@@ -151,16 +160,22 @@ def init_manager():
     print down_nodes
 
     print '\nStarting user:', targets_process[0]
-    print 'Target user:', target
+    print 'Target user:', goal
 
     while len(targets_process) > 0:
+        if targets_process[0] == None:
+            print 'Hit a None, need to wait for BFS to finish...'
+            targets_process.pop(0)
+            #manager_bfs_sema.acquire()
+            print 'BFS has finished.'
         if process_next_target() == False:
-            print 'wait for a result...'
-            manager_sema.acquire()
-            print 'result! try again'
+            print 'No available nodes, waiting...'
+            manager_node_sema.acquire()
+            print 'Free node signal received.'
+            targets_process.append('justscottaustin')
 
 '''
-BFS stuff :: THREAD 2, STARTED BY MAIN THREAD, WOKEN BY THREAD 1
+BFS stuff :: THREAD 2
 '''
 
 parent_nodes = {}
@@ -171,15 +186,16 @@ def bfs():
     return
 
 if __name__ == '__main__':
-    print 'main'
-    targets_process.append('rolledback')
-    target = 'scrub_lord'
+    targets_process.append('scrub_lord')
+    targets_process.append(None)
+    goal = 'rolledback'
+
     with open('replicates.ini', 'r') as in_file:
         config = eval(in_file.read())
         for ip in config['replicate_ips']:
             nodes.append(Replicate(ip))
-            print ip
 
     manager = threading.Thread(target = init_manager)
     manager.start()
+    print 'runnin app'
     app.run(debug = False, host = '0.0.0.0')
