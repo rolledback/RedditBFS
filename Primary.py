@@ -2,6 +2,7 @@ import threading
 from flask import Flask
 from flask import request
 import requests
+from os import _exit
 
 app = Flask(__name__)
 
@@ -20,6 +21,7 @@ class Replicate(object):
 
 nodes = []
 goal = ''
+depth = 0
 
 targets_process = []
 process_lock = threading.Lock()
@@ -27,9 +29,10 @@ process_lock = threading.Lock()
 targets_processing = []
 processing_lock = threading.Lock()
 
-targets_processed = []
 queue = []
-processed_lock = threading.Lock()
+queue_lock = threading.Lock()
+
+visited = set()
 
 manager_node_sema = threading.Semaphore(0)
 manager_bfs_sema = threading.Semaphore(0)
@@ -46,7 +49,6 @@ def status_to_str(code):
 
 def find_node_by_ip(ip):
     for node in nodes:
-        print node.ip.split(':')
         if node.ip.split(':')[0] == ip:
             return node
     return None
@@ -62,6 +64,7 @@ def ping_node(node):
 # confirm connection to and status of all nodes, updates
 # node list as needed, returns a list of all nodes who are down
 def handshake_nodes():
+    print 'Performing handshake.'
     down_node_ips = []
 
     for node in nodes:
@@ -87,6 +90,7 @@ def handshake_nodes():
 
 # send username to a node
 def send_target(node, target):
+    print 'Sending', target, 'to', node.ip
     return requests.get('http://' + node.ip + '/target/' + target)
 
 '''
@@ -98,24 +102,25 @@ api based methods :: MAIN THREAD
 # management thread
 @app.route('/result', methods = ['POST', 'GET'])
 def receive_result():
-    print request.get_data()
     data = eval(request.get_data())
     target = data['target']
     connections = data['connections']
+    print 'Receiving results for', target
 
     processing_lock.acquire()
-    processed_lock.acquire()
+    queue_lock.acquire()
 
     targets_processing.remove(target)
-    targets_processed.append(target)
-    queue.extend(connections)
+    queue.append(connections)
 
-    processed_lock.release()
+    queue_lock.release()
     processing_lock.release()
 
     node = find_node_by_ip(request.remote_addr)
     node.status = data['status']
     node.target = None
+
+    bfs_sema.release()
     manager_node_sema.release()
 
     return ''
@@ -145,6 +150,8 @@ def process_next_target():
 
 # init management thread
 def init_manager():
+    global depth
+
     print 'Initing manager...\n'
     down_nodes = handshake_nodes()
     print 'Down nodes:', len(down_nodes)
@@ -153,12 +160,16 @@ def init_manager():
     print '\nStarting user:', targets_process[0]
     print 'Target user:', goal
 
-    while len(targets_process) > 0:
-        if targets_process[0] == None:
-            targets_process.pop(0)
+    while True:
+        print '\nAttempting target processing.'
+        if len(targets_process) == 0:
+            print 'Nothing to process. Need to wait for BFS.'
             manager_bfs_sema.acquire()
+            print 'Manager waking up because things need to be processed.'
         if process_next_target() == False:
+            print 'No nodes left. Waiting for a result to come in.'
             manager_node_sema.acquire()
+            print 'Result returned, manager trying to process targets now.'
 
 '''
 BFS stuff :: THREAD 2
@@ -169,12 +180,34 @@ parent_nodes = {}
 # standard bfs, use processed list as queue, tracks depth with
 # sentinel nodes, sleeps when sentinel encountered, woken up by
 def bfs():
-    return
+    global goal
+
+    while True:
+        print '\nIterating BFS.'
+        if len(queue) == 0:
+            print 'No connections to iterate over, waiting for a result to return.'
+            bfs_sema.acquire()
+
+        queue_lock.acquire()
+        connections_list = queue.pop(0)
+        queue_lock.release()
+
+        for connection in connections_list:
+            user = connection['connection']
+            if user == goal:
+                _exit(1)
+            elif user not in visited:
+                process_lock.acquire()
+                targets_process.append(user)
+                visited.add(user)
+                process_lock.release()
+                print 'Wake up the manager,', len(targets_process), 'targets need to be processsed.'
+                manager_bfs_sema.release()
+
 
 if __name__ == '__main__':
-    targets_process.append('scrub_lord')
-    targets_process.append(None)
-    goal = 'rolledback'
+    targets_process.append('rolledback')
+    goal = 'scrub_lord'
 
     with open('replicates.ini', 'r') as in_file:
         config = eval(in_file.read())
@@ -183,5 +216,8 @@ if __name__ == '__main__':
 
     manager = threading.Thread(target = init_manager)
     manager.start()
-    print 'runnin app'
+    print 'manager started'
+    path_finder = threading.Thread(target = bfs)
+    path_finder.start()
+    print 'bfs started, running app'
     app.run(debug = False, host = '0.0.0.0')
