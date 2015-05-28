@@ -101,30 +101,21 @@ def receive_result():
     print request.get_data()
     data = eval(request.get_data())
     target = data['target']
-    print 'target'
     connections = data['connections']
-    print 'connections'
 
     processing_lock.acquire()
     processed_lock.acquire()
-    print 'acquired'
 
     targets_processing.remove(target)
     targets_processed.append(target)
     queue.extend(connections)
-    print 'done'
 
     processed_lock.release()
     processing_lock.release()
-    print 'released'
 
-    print request.remote_addr
     node = find_node_by_ip(request.remote_addr)
-    print 'found'
     node.status = data['status']
-    print 'status'
     node.target = None
-    print 'Signaling manager sema.'
     manager_node_sema.release()
 
     return ''
@@ -143,7 +134,7 @@ def process_next_target():
 
             to_send = targets_process.pop(0)
             result = send_target(node, to_send)
-            node.status = Status.BUSY
+            node.status = result.json()['status']
             targets_processing.append(to_send)
 
             processing_lock.release()
@@ -164,15 +155,10 @@ def init_manager():
 
     while len(targets_process) > 0:
         if targets_process[0] == None:
-            print 'Hit a None, need to wait for BFS to finish...'
             targets_process.pop(0)
-            #manager_bfs_sema.acquire()
-            print 'BFS has finished.'
+            manager_bfs_sema.acquire()
         if process_next_target() == False:
-            print 'No available nodes, waiting...'
             manager_node_sema.acquire()
-            print 'Free node signal received.'
-            targets_process.append('justscottaustin')
 
 '''
 BFS stuff :: THREAD 2

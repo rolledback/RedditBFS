@@ -3,6 +3,7 @@ from Primary import Status
 from flask import Flask
 from flask import json
 from flask import request
+from flask import Response
 import threading
 import requests
 import praw
@@ -38,9 +39,10 @@ def handle(func, *args, **kwargs):
     return res
 
 def process_user(username, address):
+    global status, target
     user = handle(r.get_redditor, username)
     connections = []
-    result = None
+
     for entry in handle(user.get_overview, limit = limit):
         if isinstance(entry, praw.objects.Comment):
             result = parse_comment(user.name, entry)
@@ -48,12 +50,12 @@ def process_user(username, address):
             result = parse_submission(user.name, entry)
         if result != None:
             connections.append(result)
-    print connections
+
+    status = Status.AVAILABLE
+    target = None
+
     data = {'connections': connections, 'target': username, 'status': Status.AVAILABLE}
     req = requests.post('http://' + address + ':5000/result', data = dumps(data))
-    status = Status.AVAILABLE
-    print req.status_code
-    print req.reason
 
 def parse_comment(name, comment):
     if comment.is_root and verify_name(comment.link_author):
@@ -73,9 +75,14 @@ def get_status():
 
 @app.route('/target/<name>', methods = ['GET'])
 def rec_target(name):
-    status = Status.BUSY
-    threading.Thread(target = process_user, args = (name, request.remote_addr)).start()
-    return ''
+    global status, target
+    if status != Status.BUSY and target == None:
+        status = Status.BUSY
+        target = name
+        threading.Thread(target = process_user, args = (name, request.remote_addr)).start()
+        return json.jsonify({'status': status})
+    else:
+        return Response(status = 503)
 
 if __name__ == '__main__':
     with open('config.ini', 'r') as in_file:
