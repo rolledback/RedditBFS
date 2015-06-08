@@ -8,10 +8,11 @@ import threading
 import requests
 import praw
 import time
+import random
 
 app = Flask(__name__)
 
-user_agent = 'Test PRAW app by /u/rolledback'
+user_agent = 'Test PRAW app by /u/rolledback, Node #' + str(random.randint(1, 100))
 r = praw.Reddit(user_agent = user_agent)
 limit = None
 
@@ -25,7 +26,7 @@ def handle(func, *args, **kwargs):
     attempts = 5
     start = time.time()
     res = []
-    print str(func)
+    # print str(func)
     while attempts > 0:
         try:
             res = func(*args, **kwargs)
@@ -35,11 +36,12 @@ def handle(func, *args, **kwargs):
             attempts = attempts - 1
             print str(e)
             time.sleep(2)
-    print 'Handle runtime: ' + str(time.time() - start)
+    # print 'Handle runtime: ' + str(time.time() - start)
     return res
 
 def process_user(username, address):
     global status, target
+    print 'Processing', username
     user = handle(r.get_redditor, username)
     connections = []
 
@@ -55,6 +57,7 @@ def process_user(username, address):
     target = None
 
     data = {'connections': connections, 'target': username, 'status': Status.AVAILABLE}
+    print 'Sending data back to', address, '\n'
     req = requests.post('http://' + address + ':5000/result', data = dumps(data))
 
 def parse_comment(name, comment):
@@ -85,6 +88,7 @@ def rec_target(name):
         return Response(status = 503)
 
 if __name__ == '__main__':
+    print 'Starting node with user agent', user_agent
     with open('config.ini', 'r') as in_file:
        config = eval(in_file.read())
        limit = config['limit']
